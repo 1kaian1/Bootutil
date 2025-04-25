@@ -1,0 +1,281 @@
+#!/usr/bin/env bats
+copySufix="-copy-"
+
+setup() {
+  # Create a temporary directory for boot entries
+  tmp_dir=$(mktemp -d)
+  entries_dir="$tmp_dir/loader/entries"
+  mkdir -p "$entries_dir"
+
+  # Create sample entry files
+
+  # entry1.conf – default Fedora Linux 41 entry
+  cat > "$entries_dir/entry1.conf" <<'EOF'
+title Fedora Linux 41
+version 6.12.5-200.fc41.x86_64
+linux /vmlinuz-6.12.5-200.fc41.x86_64
+initrd /initramfs-6.12.5-200.fc41.x86_64.img
+options root=UUID=cf5d1643-42a9-4168-a17e-c651f367f367 rhgb quiet
+vutfit_default y
+sort-key bbb
+EOF
+
+  # entry2.conf – Fedora Linux 41 with debug
+  cat > "$entries_dir/entry2.conf" <<'EOF'
+title Fedora Linux 41 with debug
+version 6.12.5-200.fc41.x86_64+debug
+linux /vmlinuz-6.12.5-200.fc41.x86_64
+initrd /initramfs-6.12.5-200.fc41.x86_64.img
+options root=UUID=cf5d1643-42a9-4168-a17e-c651f367f367 rhgb quiet debug
+vutfit_default n
+sort-key aaa
+EOF
+
+  # entry3.conf – Linux from Scratch
+  cat > "$entries_dir/entry3.conf" <<'EOF'
+title Linux from Scratch
+version 1.0
+linux /vmlinuz-5.11.1.x86_64
+initrd /initramfs-5.11.1.x86_64
+options root=UUID=cf5d1643-42a9-4168-a17e-c651f367f367 rhgb quiet debug
+vutfit_default n
+EOF
+}
+
+teardown() {
+  rm -rf "$tmp_dir"
+}
+
+@test "list command (default unsorted) shows all entries" {
+  run ./bootutil -b "$tmp_dir/loader/entries" list
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Fedora Linux 41" ]]
+  [[ "$output" =~ "Fedora Linux 41 with debug" ]]
+  [[ "$output" =~ "Linux from Scratch" ]]
+}
+
+@test "list command with -f sorts by file name" {
+  run ./bootutil -b "$tmp_dir/loader/entries" list -f
+  [ "$status" -eq 0 ]
+  # Expected output order is based on file names (entry1, entry2, entry3)
+  expected="Fedora Linux 41 (6.12.5-200.fc41.x86_64, /vmlinuz-6.12.5-200.fc41.x86_64)
+Fedora Linux 41 with debug (6.12.5-200.fc41.x86_64+debug, /vmlinuz-6.12.5-200.fc41.x86_64)
+Linux from Scratch (1.0, /vmlinuz-5.11.1.x86_64)"
+  [ "$output" = "$expected" ]
+}
+
+
+@test "list command filtering by title regex returns only matching entries" {
+  run ./bootutil -b "$tmp_dir/loader/entries" list -t 'Fedora'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Fedora Linux 41" ]]
+  [[ "$output" =~ "Fedora Linux 41 with debug" ]]
+  [[ ! "$output" =~ "Linux from Scratch" ]]
+}
+
+@test "remove command deletes entries with title matching regex" {
+  # Remove all entries with 'Fedora' in the title
+  run ./bootutil -b "$tmp_dir/loader/entries" remove 'Fedora'
+  [ "$status" -eq 0 ]
+  # Verify that the remaining entry is only "Linux from Scratch"
+  run ./bootutil -b "$tmp_dir/loader/entries" list
+  [[ "$output" =~ "Linux from Scratch" ]]
+  [[ ! "$output" =~ "Fedora" ]]
+}
+
+@test "duplicate command with modifications creates a new file" {
+  # Duplicate entry1.conf with modifications.
+  run ./bootutil -b "$tmp_dir/loader/entries" duplicate -a 'param=value' -r 'debug' -t 'Linux from Scratch (fixed)' --make-default "$tmp_dir/loader/entries/entry1.conf"
+  [ "$status" -eq 0 ]
+  # Find the new duplicated file by looking for the copy suffix
+  new_entry=$(find "$tmp_dir/loader/entries" -type f -name "*$copySufix*")
+  [ -n "$new_entry" ]
+  # Verify that the duplicated file has the updated title
+  run grep "^title" "$new_entry"
+  [[ "$output" =~ "Linux from Scratch (fixed)" ]]
+  # Check that the options line contains the added parameter and does not contain 'debug'
+  run grep "^options" "$new_entry"
+  [[ "$output" =~ "param=value" ]]
+  [[ ! "$output" =~ "debug" ]]
+  # Verify that the new entry is marked as default
+  run grep "^vutfit_default" "$new_entry"
+  [[ "$output" =~ "y" ]]
+}
+
+@test "show-default command displays the default entry" {
+  # In our sample setup entry1.conf is default (vutfit_default y)
+  run ./bootutil -b "$tmp_dir/loader/entries" show-default
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "title Fedora Linux 41" ]]
+}
+
+@test "make-default command sets a new default" {
+  # Make entry2.conf the default entry.
+  run ./bootutil -b "$tmp_dir/loader/entries" make-default "$tmp_dir/loader/entries/entry2.conf"
+  [ "$status" -eq 0 ]
+  # Check that entry2.conf now has vutfit_default set to y...
+  run grep "^vutfit_default" "$tmp_dir/loader/entries/entry2.conf"
+  [[ "$output" =~ "y" ]]
+  # ...and that the other entries have vutfit_default set to n.
+  run grep "^vutfit_default" "$tmp_dir/loader/entries/entry1.conf"
+  [[ "$output" =~ "n" ]]
+  run grep "^vutfit_default" "$tmp_dir/loader/entries/entry3.conf"
+  [[ "$output" =~ "n" ]]
+}
+
+@test "make-default command results in a single default file" {
+  # Use make-default to set entry2.conf as the default entry.
+  run ./bootutil -b "$entries_dir" make-default "$entries_dir/entry2.conf"
+  [ "$status" -eq 0 ]
+
+  # Check that entry2.conf is now marked as default.
+  run grep "^vutfit_default" "$entries_dir/entry2.conf"
+  [[ "$output" =~ "y" ]]
+
+  # Verify that every other entry is not default.
+  for file in "$entries_dir"/*.conf; do
+    if [ "$file" != "$entries_dir/entry2.conf" ]; then
+      # If the file contains a vutfit_default line, it must not be 'y'
+      grep_output=$(grep "^vutfit_default" "$file" || true)
+      if [ -n "$grep_output" ]; then
+        [[ "$grep_output" =~ "n" ]]
+      fi
+      # If there's no vutfit_default line, that's acceptable (means not default)
+    fi
+  done
+}
+
+@test "list command with -s sorts by sort-key then filename" {
+  run ./bootutil -b "$tmp_dir/loader/entries" list -s
+  [ "$status" -eq 0 ]
+  # entry2.conf (sort-key aaa) should come first, then entry1.conf (sort-key bbb),
+  # and entry3.conf (no sort-key) sorted by filename last.
+  expected="Fedora Linux 41 with debug (6.12.5-200.fc41.x86_64+debug, /vmlinuz-6.12.5-200.fc41.x86_64)
+Fedora Linux 41 (6.12.5-200.fc41.x86_64, /vmlinuz-6.12.5-200.fc41.x86_64)
+Linux from Scratch (1.0, /vmlinuz-5.11.1.x86_64)"
+  [ "$output" = "$expected" ]
+}
+
+
+@test "list command filtering by kernel regex returns only matching entries" {
+  # Kernel path of Fedora entries starts with /vmlinuz-6.12
+  run ./bootutil -b "$tmp_dir/loader/entries" list -k '^/vmlinuz-6\.12'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Fedora Linux 41" ]]
+  [[ "$output" =~ "Fedora Linux 41 with debug" ]]
+  [[ ! "$output" =~ "Linux from Scratch" ]]
+}
+
+@test "list command filtering by kernel regex for Linux from Scratch returns only that entry" {
+  # Kernel path of Linux from Scratch starts with /vmlinuz-5.11
+  run ./bootutil -b "$tmp_dir/loader/entries" list -k '/vmlinuz-5\.11'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Linux from Scratch" ]]
+  [[ ! "$output" =~ "Fedora" ]]
+}
+
+@test "list command with combined title and kernel regex filters returns correct entries" {
+  # Both filters must match: title contains 'Fedora' and kernel path starts with /vmlinuz-6.12
+  run ./bootutil -b "$tmp_dir/loader/entries" list -t 'Fedora' -k '^/vmlinuz-6\.12'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Fedora Linux 41" ]]
+  [[ "$output" =~ "Fedora Linux 41 with debug" ]]
+  [[ ! "$output" =~ "Linux from Scratch" ]]
+}
+
+@test "list command with non-matching filters returns no entries" {
+  run ./bootutil -b "$tmp_dir/loader/entries" list -t 'Nonexistent'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "duplicate command with multiple -t parameters uses the last provided title" {
+  run ./bootutil -b "$entries_dir" duplicate -t "Title One" -t "Title Two" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^title" "$new_entry"
+  [[ "$output" =~ "Title Two" ]]
+}
+
+@test "duplicate command with -k option changes the linux field" {
+  new_kernel="/vmlinuz-new-version"
+  run ./bootutil -b "$entries_dir" duplicate -k "$new_kernel" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^linux" "$new_entry"
+  [[ "$output" =~ "$new_kernel" ]]
+}
+
+@test "duplicate command with -i option changes the initrd field" {
+  new_initrd="/initramfs-new.img"
+  run ./bootutil -b "$entries_dir" duplicate -i "$new_initrd" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^initrd" "$new_entry"
+  [[ "$output" =~ "$new_initrd" ]]
+}
+
+@test "duplicate command with multiple -a options adds each unique parameter only once" {
+  # Use two different parameters, and repeat one of them.
+  run ./bootutil -b "$entries_dir" duplicate -a "foo=bar" -a "baz=qux" -a "foo=bar" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^options" "$new_entry"
+  # Check that both parameters are present, and "foo=bar" appears only once.
+  [[ "$output" =~ "foo=bar" ]]
+  [[ "$output" =~ "baz=qux" ]]
+  # Count occurrences of foo=bar (using grep -o and wc -l)
+  count=$(grep -o "foo=bar" <<< "$output" | wc -l | tr -d ' ')
+  [ "$count" -eq 1 ]
+}
+
+@test "duplicate command with multiple -r options removes specified parameters" {
+  # The original options line contains "rhgb quiet debug"
+  run ./bootutil -b "$entries_dir" duplicate -r "quiet" -r "debug" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^options" "$new_entry"
+  # Verify that 'quiet' and 'debug' have been removed.
+  [[ ! "$output" =~ "quiet" ]]
+  [[ ! "$output" =~ "debug" ]]
+}
+
+@test "duplicate command with -r then -a: removal followed by addition" {
+  # Remove 'debug' then add a new debug parameter with a value.
+  run ./bootutil -b "$entries_dir" duplicate -r "debug" -a "debug=new" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^options" "$new_entry"
+  # The original options had "debug" which should be removed, then "debug=new" should appear.
+  [[ ! "$output" =~ " debug " ]]  # check no standalone debug remains
+  [[ "$output" =~ "debug=new" ]]
+}
+
+@test "duplicate command with multiple -a and -r options applied in given order" {
+  # First add a parameter, then remove it; final output should not contain that parameter.
+  run ./bootutil -b "$entries_dir" duplicate -a "removeMe=1" -r "removeMe=1" "$entries_dir/entry1.conf"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^options" "$new_entry"
+
+  [[ ! "$output" =~ "removeMe=1" ]]
+}
+
+@test "duplicate command without entry file uses the default entry" {
+  # Ensure there is a default entry (vutfit_default y) in one file.
+  # entry1.conf is default.
+  run ./bootutil -b "$entries_dir" duplicate -t "Default Duplication"
+  [ "$status" -eq 0 ]
+  new_entry=$(find "$entries_dir" -type f -name "*$copySufix*")
+  run grep "^title" "$new_entry"
+  [[ "$output" =~ "Default Duplication" ]]
+}
+
+@test "duplicate command fails when no default exists and no entry file provided" {
+  # Remove default flag from all entries.
+  for file in "$entries_dir"/*.conf; do
+    sed -i 's/vutfit_default y/vutfit_default n/' "$file"
+  done
+  run ./bootutil -b "$entries_dir" duplicate -t "Should Fail"
+  [ "$status" -ne 0 ]
+}
