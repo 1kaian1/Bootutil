@@ -1,6 +1,8 @@
 #!/bin/bash
+#set -x
 
-directory="/boot/loader/entries"
+
+directory="test-dir"
 
 # Change to new, unconventional directory
 change_directory() {
@@ -122,7 +124,7 @@ duplicate_entries() {
   # Looks for <entry_file_path>, deletes the argument after retrieval. <entry_file_path> needs to be in
   # path/to/file.conf format, "/path/to\ file.conf" probably won't work.
   for (( ; index <= $#; index++ )); do
-    if [ -f "$directory/${!index}" ] && [ "$(eval echo \${$((index - 1))})" != "-d" ]; then
+    if [ -f ".${!index}" ] && [ "$(eval echo \${$((index - 1))})" != "-d" ]; then
       echo "HERE"
       file="${!index}"
       set -- "${@:1:index-1}" "${@:index+1}"
@@ -137,7 +139,7 @@ duplicate_entries() {
   fi
 
   filename=""
-  content="$(<"$directory/$file")"
+  content="$(<".$file")"
   content="$(echo "$content" | sed -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/')"
 
   while [ -n "${!cur_arg_pos}" ]; do
@@ -272,7 +274,7 @@ EOF
     base_name=$(basename "$file" .conf)
     dir_name=$(dirname "$file")
     dest_file="$dir_name/${base_name}-copy-$(date +%s).conf"
-    cat <<EOF > "$dest_file"
+    cat <<EOF > ".$dest_file"
 $content
 EOF
   else
