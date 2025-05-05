@@ -300,12 +300,12 @@ show_default_entry() {
 
 # Makes given entry default.
 make_default_entry() {
-  if [ -z "${!arg_position}" ]; then
+  if [ -z "${!cur_arg_pos}" ]; then
     echo "[ERROR: make-default]: Missing path to the file to be set as default."
     exit 1
   fi
-  if [ ! -f "${!arg_position}" ]; then
-    echo "[ERROR: make-default]: File ${!arg_position} not found."
+  if [ ! -f "${!cur_arg_pos}" ]; then
+    echo "[ERROR: make-default]: File ${!cur_arg_pos} not found."
     exit 1
   fi
 
@@ -314,7 +314,7 @@ make_default_entry() {
   if [ -n "$current_default" ]; then
     sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/' "$current_default"
   fi
-  sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default y/' "${!arg_position}"
+  sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default y/' "${!cur_arg_pos}"
 
   cur_arg_pos=$((cur_arg_pos + 2))
 }
