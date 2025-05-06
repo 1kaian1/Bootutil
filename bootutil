@@ -1,8 +1,6 @@
 #!/bin/bash
-#set -x
 
-
-directory="test-dir"
+directory="test-dir4"
 
 # Change to new, unconventional directory
 change_directory() {
@@ -28,75 +26,83 @@ find_entry() {
 
 # List entries sorted by given flag or only those with corresponding kernel/title regex value.
 list_entries() {
-  next_arg_pos=$((cur_arg_pos + 1))
-  case "${!cur_arg_pos}" in
 
-    ""|"-f")
-      # Looks for files with .conf in $directory and sorts them by name.
-      find "$directory" -type f -name "*.conf" | sort | while read -r file; do
-        find_entry "$file"
-        echo "$title ($version, $linux)"
-      done
-      cur_arg_pos=$((cur_arg_pos + 1))
-      ;;
+  while [ -n "${!cur_arg_pos}" ]; do
+    next_arg_pos=$((cur_arg_pos + 1))
 
-    "-s")
-      # Looks for files with .conf in $directory and sorts them by sort-key value.
-      grep -H "sort-key" "$directory"/*.conf | \
-        sed -n 's/^\(.*\):.*sort-key \(.*\)$/\2 \1/p' | \
-        sort -k1,1 -k2,2 | \
-        while read -r key file; do
+    case "${!cur_arg_pos}" in
+
+      "-s")
+        # Looks for files with .conf in $directory and sorts them by sort-key value.
+        grep -H "sort-key" "$directory"/*.conf | \
+          sed -n 's/^\(.*\):.*sort-key \(.*\)$/\2 \1/p' | \
+          sort -k1,1 -k2,2 | \
+          while read -r key file; do
+            find_entry "$file"
+            echo "$title ($version, $linux)"
+          done
+
+        # Looks for files with .conf in $directory withnout sort-key value.
+        grep -L "sort-key" "$directory"/*.conf | sort | while read -r file; do
           find_entry "$file"
           echo "$title ($version, $linux)"
         done
+        cur_arg_pos=$((cur_arg_pos + 1))
 
-      # Looks for files with .conf in $directory withnout sort-key value.
-      grep -L "sort-key" "$directory"/*.conf | sort | while read -r file; do
-        find_entry "$file"
-        echo "$title ($version, $linux)"
-      done
-      cur_arg_pos=$((cur_arg_pos + 1))
-      ;;
+        exit 0
+        ;;
 
-    "-k")
-      if [ -n "${!next_arg_pos}" ]; then
-        # Goes through every file and searches for given pattern in kernel value.
-        for file in "$directory"/*.conf; do
-          [ -f "$file" ] || continue
-          find_entry "$file"
-          if [[ "$linux" =~ ${!next_arg_pos} ]]; then
-            echo "$title ($version, $linux)"
-          fi
-        done
-      else
-        echo "[ERROR: list -k]: Regular expression for kernel missing."
+      "-k")
+        if [ -n "${!next_arg_pos}" ]; then
+          kernel_regex="${!next_arg_pos}"
+        else
+          echo "[ERROR: list -k]: Regular expression for kernel missing."
+          exit 1
+        fi
+        cur_arg_pos=$((cur_arg_pos + 2))
+        ;;
+
+      "-t")
+        if [ -n "${!next_arg_pos}" ]; then
+          title_regex="${!next_arg_pos}"
+        else
+          echo "[ERROR: list -t]: Regular expression for title missing."
+          exit 1
+        fi
+        cur_arg_pos=$((cur_arg_pos + 2))
+        ;;
+
+      *)
+        echo "[ERROR: list]: Unknown list flag \"${!cur_arg_pos}\"."
         exit 1
-      fi
-      cur_arg_pos=$((cur_arg_pos + 2))
-      ;;
+        ;;
+    esac
+  done
 
-    "-t")
-      if [ -n "${!next_arg_pos}" ]; then
-        # Goes through every file in $directory and searches for given pattern in title value.
-        for file in "$directory"/*.conf; do
-          [ -f "$file" ] || continue
-          find_entry "$file"
-          if [[ "$title" =~ ${!next_arg_pos} ]]; then
-            echo "$title ($version, $linux)"
-          fi
-        done
-      else
-        echo "[ERROR: list -t]: Regular expression for title missing."
-        exit 1
-      fi
-      cur_arg_pos=$((cur_arg_pos + 2))
-      ;;
+  shopt -s dotglob nullglob
 
-    *)
-      echo "[ERROR: list]: Unknown list flag \"${!cur_arg_pos}\"."
-      exit 1
-      ;;
-  esac
+  for file in "$directory"/*.conf; do
+    [ -f "$file" ] || continue
+    find_entry "$file"
+
+    match_title=true
+    match_kernel=true
+
+    if [ -n "$title_regex" ] && [[ ! "$title" =~ $title_regex ]]; then
+      match_title=false
+    fi
+
+    if [ -n "$kernel_regex" ] && [[ ! "$linux" =~ $kernel_regex ]]; then
+      match_kernel=false
+    fi
+
+    if $match_title && $match_kernel; then
+      echo "$title ($version, $linux)"
+    fi
+  done
+
+  shopt -u dotglob nullglob
+
 }
 
 remove_entries() {
@@ -125,14 +131,13 @@ duplicate_entries() {
   # path/to/file.conf format, "/path/to\ file.conf" probably won't work.
   for (( ; index <= $#; index++ )); do
     if [ -f ".${!index}" ] && [ "$(eval echo \${$((index - 1))})" != "-d" ]; then
-      echo "HERE"
       file="${!index}"
       set -- "${@:1:index-1}" "${@:index+1}"
       break
     fi
   done
   if [ -z "$file" ] && [ -n "$current_default" ]; then
-    file=$(basename "$current_default")
+    file="/$current_default"
   elif [ -z "$file" ] && [ -z "$current_default" ]; then
     echo "[ERROR: duplicate]: Missing filepath or default entry."
     exit 1
@@ -140,6 +145,7 @@ duplicate_entries() {
 
   filename=""
   content="$(<".$file")"
+
   content="$(echo "$content" | sed -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/')"
 
   while [ -n "${!cur_arg_pos}" ]; do
@@ -147,7 +153,6 @@ duplicate_entries() {
     case "${!cur_arg_pos}" in
 
       "-k")
-        echo "KERNEL"
         if [ -n "${!next_arg_pos}" ]; then
           kernel_path="${!next_arg_pos}"
           content="$(echo "$content" | sed -E "s|^linux .*|linux $kernel_path|")"
@@ -232,8 +237,8 @@ duplicate_entries() {
       "-d")
         full_path="${!next_arg_pos}"
 
-        if [ -d "$(dirname "$full_path")" ]; then
-          new_dest=$(dirname "$full_path")
+        if [ -d "$(dirname ".$full_path")" ]; then
+          new_dest=$(dirname ".$full_path")
           filename=$(basename "$full_path")
         else
           echo "[ERROR: duplicate -d]: Missing path to the output log file."
@@ -244,11 +249,15 @@ duplicate_entries() {
 
       "--make-default")
         content="$(echo "$content" | sed -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default y/')"
+        if ! echo "$content" | grep -qE '^vutfit_default[[:space:]]+[yn]'; then
+          content="${content}"$'\n'"vutfit_default y"
+        fi
 
-        for file in "$directory"/*; do
-          [[ ! -f "$file" ]] && continue
-          sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/' "$file"
+        for filee in "$directory"/*; do
+          [[ ! -f "$filee" ]] && continue
+          sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/' "$filee"
         done
+
         cur_arg_pos=$((cur_arg_pos + 1))
         ;;
 
@@ -261,22 +270,20 @@ duplicate_entries() {
 
   if [ -d "$new_dest" ]; then
 
-    if [ -z "$dir_name" ]; then
-      dir_name="$PWD"  # Pokud je dir_name prázdné, použij aktuální pracovní adresář.
-    fi
-
-    dest_file="$dir_name/${filename}"
+    dest_file="$new_dest/${filename}"
     cat <<EOF > "$dest_file"
 $content
 EOF
+
   elif [ -z "$new_dest" ]; then
 
     base_name=$(basename "$file" .conf)
     dir_name=$(dirname "$file")
-    dest_file="$dir_name/${base_name}-copy-$(date +%s).conf"
+    dest_file="/$dir_name/${base_name}-copy-$(date +%s).conf"
     cat <<EOF > ".$dest_file"
 $content
 EOF
+
   else
     echo "[ERROR: duplicate]: Creating new file failed."
   fi
@@ -300,11 +307,12 @@ show_default_entry() {
 
 # Makes given entry default.
 make_default_entry() {
+
   if [ -z "${!cur_arg_pos}" ]; then
     echo "[ERROR: make-default]: Missing path to the file to be set as default."
     exit 1
   fi
-  if [ ! -f "${!cur_arg_pos}" ]; then
+  if [ ! -f ".${!cur_arg_pos}" ]; then
     echo "[ERROR: make-default]: File ${!cur_arg_pos} not found."
     exit 1
   fi
@@ -314,7 +322,11 @@ make_default_entry() {
   if [ -n "$current_default" ]; then
     sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default n/' "$current_default"
   fi
-  sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default y/' "${!cur_arg_pos}"
+
+  sed -i -E 's/^vutfit_default[[:space:]]+[yn]/vutfit_default y/' ".${!cur_arg_pos}"
+  if ! grep -qE '^vutfit_default[[:space:]]+[yn]' ".${!cur_arg_pos}"; then
+    echo "vutfit_default y" >> ".${!cur_arg_pos}"
+  fi
 
   cur_arg_pos=$((cur_arg_pos + 2))
 }
@@ -366,18 +378,3 @@ while [ $cur_arg_pos -le $# ]; do
       ;;
   esac
 done
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
